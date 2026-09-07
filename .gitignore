@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+*$py.class
+*.html
+app.py
+generator.py
+main.py
+usta_api.py
+tests/
+.vscode/
+.idea/

@@ -1,0 +1,584 @@
+#!/usr/bin/env python3
+"""
+USTA Tournament Standings & Rankings Generator (All-in-One Standalone Script)
+No external dependencies required (uses only Python 3 standard library).
+
+Usage:
+    python usta_rankings.py
+    python usta_rankings.py "https://playtennis.usta.com/.../players/<tournament-id>"
+    python usta_rankings.py <tournament-id> --list-name "Boys' 12 National Standings List (combined)"
+"""
+
+import os
+import sys
+import re
+import json
+import urllib.request
+import urllib.error
+import hmac
+import hashlib
+import argparse
+import webbrowser
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Optional, List, Dict, Any, Callable
+
+# Ensure safe UTF-8 output on Windows consoles
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
+CLUBSPARK_GRAPHQL_URL = "https://prd-usta-kube-tournaments.clubspark.pro/graphql"
+USTA_RANKINGS_API_URL = "https://www.usta.com/usta/api?type=playerRankings"
+USTA_API_HMAC_SECRET = b"89Wd0xPoep"
+DEFAULT_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+)
+DEFAULT_TARGET_LIST = "Boys' 12 National Standings List (combined)"
+UUID_PATTERN = re.compile(
+    r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+)
+
+
+def extract_tournament_id(url_or_id: str) -> str:
+    """
+    Extracts a tournament UUID from a full URL, validates an existing UUID,
+    or automatically resolves a USTA Sanction Tournament ID (e.g. '26-17452') via search.
+    """
+    clean_input = url_or_id.strip()
+    match = UUID_PATTERN.search(clean_input)
+    if match:
+        return match.group(0).upper()
+
+    # Search via USTA Unified Search API for sanction codes (e.g. 26-17452)
+    try:
+        import urllib.parse
+        encoded = urllib.parse.quote(clean_input)
+        search_url = f"https://prd-usta-kube.clubspark.pro/unified-search-api/api/Search/tournaments/TextQuery?indexSchema=tournament&text={encoded}"
+        req = urllib.request.Request(
+            search_url,
+            headers={"User-Agent": DEFAULT_USER_AGENT, "Accept": "application/json"}
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            items = data.get("items") or []
+            if items and "id" in items[0]:
+                return items[0]["id"].upper()
+    except Exception:
+        pass
+
+    raise ValueError(f"Could not find tournament for input: '{url_or_id}'. Provide a tournament URL, UUID, or Sanction ID (e.g. 26-17452).")
+
+
+def fetch_tournament_details(tournament_id: str, timeout: int = 15) -> Dict[str, Any]:
+    """Fetches tournament details (name, venue, sanction status, identification code) via Clubspark GraphQL."""
+    tournament_id = extract_tournament_id(tournament_id)
+    query = """
+    query GetTournament($id: UUID!, $previewMode: Boolean) {
+      publishedTournament(id: $id, previewMode: $previewMode) {
+        id
+        identificationCode
+        name
+        sanctionStatus
+        isPublished
+        organisation {
+          id
+          name
+        }
+        events {
+          id
+          division {
+            gender
+            eventType
+          }
+          level {
+            name
+            category
+          }
+        }
+      }
+    }
+    """
+    payload = json.dumps({"query": query, "variables": {"id": tournament_id, "previewMode": False}}).encode("utf-8")
+    req = urllib.request.Request(
+        CLUBSPARK_GRAPHQL_URL,
+        data=payload,
+        headers={"User-Agent": DEFAULT_USER_AGENT, "Content-Type": "application/json", "Accept": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            return data.get("data", {}).get("publishedTournament") or {}
+    except Exception as exc:
+        return {"id": tournament_id, "name": f"Tournament {tournament_id}", "error": str(exc)}
+
+
+def fetch_tournament_players(tournament_id: str, timeout: int = 15) -> List[Dict[str, Any]]:
+    """Fetches all registered players for a tournament with pagination."""
+    tournament_id = extract_tournament_id(tournament_id)
+    query = """
+    query GetPlayers($id: UUID!, $queryParameters: QueryParametersPaged!) {
+      paginatedPublicTournamentRegistrations(tournamentId: $id, queryParameters: $queryParameters) {
+        totalItems
+        items {
+          firstName: playerFirstName
+          gender: playerGender
+          lastName: playerLastName
+          city: playerCity
+          state: playerState
+          playerName
+          playerId {
+            key
+            value
+          }
+          playerCustomIds {
+            key
+            value
+          }
+        }
+      }
+    }
+    """
+    all_players = []
+    offset = 0
+    limit = 100
+    headers = {"User-Agent": DEFAULT_USER_AGENT, "Content-Type": "application/json", "Accept": "application/json"}
+
+    while True:
+        payload = json.dumps({
+            "query": query,
+            "variables": {"id": tournament_id, "queryParameters": {"offset": offset, "limit": limit}}
+        }).encode("utf-8")
+        req = urllib.request.Request(CLUBSPARK_GRAPHQL_URL, data=payload, headers=headers, method="POST")
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+
+        result = data.get("data", {}).get("paginatedPublicTournamentRegistrations") or {}
+        total = result.get("totalItems", 0)
+        items = result.get("items") or []
+
+        for item in items:
+            custom_ids = {
+                entry.get("key"): entry.get("value")
+                for entry in item.get("playerCustomIds", [])
+                if isinstance(entry, dict) and entry.get("key")
+            }
+            usta_id = custom_ids.get("ustaId")
+            all_players.append({
+                "name": item.get("playerName") or f"{item.get('firstName', '')} {item.get('lastName', '')}".strip(),
+                "city": item.get("city", ""),
+                "state": item.get("state", ""),
+                "usta_id": usta_id,
+            })
+
+        offset += limit
+        if offset >= total or not items:
+            break
+
+    return all_players
+
+
+def fetch_player_rankings(uaid: str, timeout: int = 12) -> List[Dict[str, Any]]:
+    """Fetches all official ranking lists for a player UAID using HMAC-SHA256 signature."""
+    if not uaid:
+        return []
+
+    payload_str = json.dumps({"selection": {"uaid": str(uaid)}}, separators=(",", ":"))
+    hash_sig = hmac.new(USTA_API_HMAC_SECRET, payload_str.encode("utf-8"), hashlib.sha256).hexdigest()
+    headers = {
+        "User-Agent": DEFAULT_USER_AGENT,
+        "Content-Type": "application/json",
+        "Accept": "application/json, text/plain, */*",
+        "Hash": hash_sig,
+        "Referer": f"https://www.usta.com/en/home/play/player-search/profile.html#uaid={uaid}&tab=rankings",
+    }
+    req = urllib.request.Request(USTA_RANKINGS_API_URL, data=payload_str.encode("utf-8"), headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            return data.get("player", {}).get("rankings") or []
+    except Exception:
+        return []
+
+
+def fetch_tournament_roster_with_rankings(
+    tournament_id: str,
+    max_workers: int = 6,
+    on_progress: Optional[Callable[[int, int, str], None]] = None,
+) -> Dict[str, Any]:
+    """Fetches tournament details, all registered players, and concurrently fetches rankings."""
+    t_id = extract_tournament_id(tournament_id)
+    details = fetch_tournament_details(t_id)
+    players = fetch_tournament_players(t_id)
+
+    total_players = len(players)
+    completed_count = 0
+
+    if total_players == 0:
+        return {"tournament": details, "players": []}
+
+    def _worker(player_dict: Dict[str, Any]) -> Dict[str, Any]:
+        p = dict(player_dict)
+        uid = p.get("usta_id")
+        p["rankings"] = fetch_player_rankings(uid) if uid else []
+        return p
+
+    enriched_players = []
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_player = {executor.submit(_worker, p): p for p in players}
+        for future in as_completed(future_to_player):
+            p_res = future.result()
+            enriched_players.append(p_res)
+            completed_count += 1
+            if on_progress:
+                on_progress(completed_count, total_players, p_res.get("name", ""))
+
+    return {"tournament": details, "players": enriched_players}
+
+
+def process_player_rankings(players: List[Dict[str, Any]], target_list_name: str) -> List[Dict[str, Any]]:
+    """Filters player data specifically for the target standings list and sorts by rank."""
+    processed = []
+    target_lower = target_list_name.strip().lower()
+
+    for p in players:
+        p_copy = dict(p)
+        rankings = p.get("rankings") or []
+        matched = None
+        for r in rankings:
+            label = (r.get("displayLabel") or "").strip().lower()
+            if target_lower in label or label in target_lower:
+                matched = r
+                break
+
+        if matched:
+            rank_obj = matched.get("rank") or {}
+            rec_obj = matched.get("record") or {}
+            p_copy["has_target_rank"] = True
+            p_copy["national_rank"] = rank_obj.get("national")
+            p_copy["section_rank"] = rank_obj.get("section")
+            p_copy["district_rank"] = rank_obj.get("district")
+            p_copy["points"] = matched.get("points")
+            p_copy["wins"] = rec_obj.get("win", 0)
+            p_copy["losses"] = rec_obj.get("loss", 0)
+            p_copy["section"] = matched.get("section") or ""
+            p_copy["district"] = matched.get("district") or ""
+            p_copy["trend"] = matched.get("trendDirection") or "no change"
+        else:
+            p_copy["has_target_rank"] = False
+            p_copy["national_rank"] = None
+            p_copy["section_rank"] = None
+            p_copy["district_rank"] = None
+            p_copy["points"] = None
+            p_copy["wins"] = 0
+            p_copy["losses"] = 0
+            p_copy["section"] = ""
+            p_copy["district"] = ""
+            p_copy["trend"] = "none"
+
+        uaid = p.get("usta_id")
+        p_copy["profile_url"] = (
+            f"https://www.usta.com/en/home/play/player-search/profile.html#uaid={uaid}&tab=rankings" if uaid else None
+        )
+        processed.append(p_copy)
+
+    processed.sort(key=lambda x: (0 if (x["national_rank"] is not None) else 1, x["national_rank"] or 999999, x["name"].lower()))
+    return processed
+
+
+def generate_html(tournament: Dict[str, Any], players: List[Dict[str, Any]], target_list: str) -> str:
+    """Creates a standalone, interactive HTML dashboard."""
+    processed = process_player_rankings(players, target_list)
+    total_players = len(processed)
+    ranked = [p for p in processed if p["has_target_rank"]]
+    best_rank = min((p["national_rank"] for p in ranked if p["national_rank"]), default="N/A")
+    t_name = tournament.get("name") or f"Tournament {tournament.get('id', '')}"
+    t_org = tournament.get("organisation", {}).get("name") or "USTA Tournament"
+    t_id = tournament.get("id", "")
+    t_code = tournament.get("identificationCode") or ""
+
+    client_json = json.dumps({"tournament": tournament, "targetList": target_list, "players": processed}, indent=2)
+
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{t_name} - Player Rankings</title>
+    <style>
+        :root {{ --primary: #0284c7; --primary-dark: #0369a1; --bg: #f8fafc; --card: #ffffff; --border: #e2e8f0; --text: #1e293b; --muted: #64748b; }}
+        * {{ box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }}
+        body {{ background: var(--bg); color: var(--text); padding: 24px; }}
+        .container {{ max-width: 1250px; margin: 0 auto; }}
+        header {{ background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); color: white; padding: 30px; border-radius: 14px; margin-bottom: 20px; }}
+        h1 {{ font-size: 1.8rem; margin: 8px 0; }}
+        .sub {{ color: #94a3b8; font-size: 0.95rem; display: flex; gap: 14px; flex-wrap: wrap; }}
+        .badge {{ display: inline-flex; padding: 3px 8px; border-radius: 9999px; font-size: 0.75rem; font-weight: 600; text-transform: uppercase; }}
+        .badge-court {{ background: rgba(34,197,94,0.2); color: #4ade80; border: 1px solid rgba(34,197,94,0.4); }}
+        .badge-section {{ background: #fef3c7; color: #92400e; border: 1px solid #fde68a; }}
+        .badge-unranked {{ background: #f1f5f9; color: #64748b; }}
+        .banner {{ margin-top: 14px; background: rgba(255,255,255,0.08); border-left: 4px solid #38bdf8; padding: 10px 14px; border-radius: 6px; font-size: 0.95rem; }}
+        .grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; margin-bottom: 20px; }}
+        .stat {{ background: var(--card); padding: 18px; border-radius: 10px; border: 1px solid var(--border); }}
+        .stat-lbl {{ font-size: 0.75rem; font-weight: 600; color: var(--muted); text-transform: uppercase; }}
+        .stat-val {{ font-size: 1.6rem; font-weight: 800; margin-top: 4px; }}
+        .controls {{ background: var(--card); padding: 14px 18px; border-radius: 10px; border: 1px solid var(--border); margin-bottom: 18px; display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }}
+        .controls input {{ flex: 1; min-width: 220px; padding: 8px 14px; border: 1px solid var(--border); border-radius: 6px; font-size: 0.95rem; }}
+        .controls select, .controls button {{ padding: 8px 14px; border: 1px solid var(--border); border-radius: 6px; background: white; cursor: pointer; font-weight: 500; font-size: 0.9rem; }}
+        .controls button {{ background: var(--primary); color: white; border: none; }}
+        .controls button:hover {{ background: var(--primary-dark); }}
+        .table-box {{ background: var(--card); border-radius: 10px; border: 1px solid var(--border); overflow-x: auto; }}
+        table {{ width: 100%; border-collapse: collapse; text-align: left; }}
+        th {{ background: #f1f5f9; color: var(--muted); font-size: 0.75rem; font-weight: 700; text-transform: uppercase; padding: 12px 14px; border-bottom: 2px solid var(--border); cursor: pointer; user-select: none; }}
+        th:hover {{ background: #e2e8f0; }}
+        th.sorted-asc::after {{ content: " ▲"; color: var(--primary); }}
+        th.sorted-desc::after {{ content: " ▼"; color: var(--primary); }}
+        td {{ padding: 12px 14px; border-bottom: 1px solid var(--border); font-size: 0.9rem; vertical-align: middle; }}
+        tr:hover td {{ background: #f8fafc; }}
+        .pname {{ font-weight: 700; color: #0f172a; text-decoration: none; }}
+        .pname:hover {{ color: var(--primary); text-decoration: underline; }}
+        .btn-view {{ padding: 3px 8px; font-size: 0.75rem; border-radius: 4px; border: 1px solid #cbd5e1; background: #f1f5f9; cursor: pointer; }}
+        .btn-view:hover {{ background: #e2e8f0; }}
+        .modal {{ position: fixed; inset: 0; background: rgba(15,23,42,0.6); display: none; align-items: center; justify-content: center; z-index: 99; }}
+        .modal-box {{ background: white; border-radius: 12px; width: 90%; max-width: 600px; max-height: 80vh; overflow-y: auto; padding: 22px; }}
+        .modal-item {{ border: 1px solid var(--border); border-radius: 6px; padding: 10px; margin-bottom: 8px; background: #f8fafc; font-size: 0.85rem; }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <span class="badge badge-court">USTA Standings</span>
+            <h1>{t_name}</h1>
+            <div class="sub">
+                <span>📍 {t_org}</span>
+                <span>•</span>
+                {f'<span><strong>Tournament ID:</strong> <code>{t_code}</code></span> <span>•</span>' if t_code else ''}
+                <span>UUID: <code>{t_id}</code></span>
+            </div>
+            <div class="banner">
+                <strong>Target List:</strong> <span style="color: #38bdf8;">{target_list}</span>
+            </div>
+        </header>
+
+        <div class="grid">
+            <div class="stat"><div class="stat-lbl">Total Players</div><div class="stat-val">{total_players}</div></div>
+            <div class="stat"><div class="stat-lbl">Ranked Players</div><div class="stat-val" style="color: var(--primary);">{len(ranked)}</div></div>
+            <div class="stat"><div class="stat-lbl">Top National Rank</div><div class="stat-val" style="color: #16a34a;">#{best_rank}</div></div>
+            <div class="stat"><div class="stat-lbl">Unranked</div><div class="stat-val" style="color: var(--muted);">{total_players - len(ranked)}</div></div>
+        </div>
+
+        <div class="controls">
+            <input type="text" id="search" placeholder="Search name, city, state, or section...">
+            <select id="statusFilter">
+                <option value="all">All Players ({total_players})</option>
+                <option value="ranked">Ranked Only ({len(ranked)})</option>
+                <option value="unranked">Unranked Only ({total_players - len(ranked)})</option>
+            </select>
+            <button onclick="exportCSV()">Export CSV</button>
+        </div>
+
+        <div class="table-box">
+            <table>
+                <thead>
+                    <tr>
+                        <th onclick="sortT('pos')">#</th>
+                        <th onclick="sortT('name')">Player Name</th>
+                        <th onclick="sortT('usta_id')">USTA ID</th>
+                        <th onclick="sortT('national_rank')" class="sorted-asc">Nat. Rank</th>
+                        <th onclick="sortT('section_rank')">Sec. Rank</th>
+                        <th onclick="sortT('district_rank')">Dist. Rank</th>
+                        <th onclick="sortT('points')">Points</th>
+                        <th onclick="sortT('record')">Record (W-L)</th>
+                        <th onclick="sortT('city')">Location</th>
+                        <th onclick="sortT('section')">Section</th>
+                        <th>All Rankings</th>
+                    </tr>
+                </thead>
+                <tbody id="tbody"></tbody>
+            </table>
+        </div>
+    </div>
+
+    <div id="modal" class="modal" onclick="closeM(event)">
+        <div class="modal-box" onclick="event.stopPropagation()">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+                <h3 id="mName" style="font-weight:700;"></h3>
+                <button onclick="closeM()" style="border:none; background:none; font-size:1.5rem; cursor:pointer;">&times;</button>
+            </div>
+            <div id="mList"></div>
+        </div>
+    </div>
+
+    <script>
+        const data = {client_json};
+        let sortCol = 'national_rank', sortAsc = true;
+
+        function render() {{
+            const search = document.getElementById('search').value.toLowerCase().trim();
+            const status = document.getElementById('statusFilter').value;
+            let list = data.players.filter(p => {{
+                if (status === 'ranked' && !p.has_target_rank) return false;
+                if (status === 'unranked' && p.has_target_rank) return false;
+                if (!search) return true;
+                return (p.name||'').toLowerCase().includes(search) || (p.city||'').toLowerCase().includes(search) || (p.section||'').toLowerCase().includes(search);
+            }});
+
+            list.sort((a, b) => {{
+                let valA = a[sortCol] ?? (sortCol.includes('rank') ? 999999 : (sortCol === 'points' ? -1 : ''));
+                let valB = b[sortCol] ?? (sortCol.includes('rank') ? 999999 : (sortCol === 'points' ? -1 : ''));
+                if (typeof valA === 'string') valA = valA.toLowerCase();
+                if (typeof valB === 'string') valB = valB.toLowerCase();
+                return (valA < valB ? -1 : 1) * (sortAsc ? 1 : -1);
+            }});
+
+            document.getElementById('tbody').innerHTML = list.map((p, idx) => {{
+                const nRank = p.national_rank ? `#${{p.national_rank}}` : '<span class="badge badge-unranked">Unranked</span>';
+                const sRank = p.section_rank ? `#${{p.section_rank}}` : '-';
+                const dRank = p.district_rank ? `#${{p.district_rank}}` : '-';
+                const pts = p.points !== null ? `<strong>${{p.points}}</strong>` : '-';
+                const rec = p.has_target_rank ? `${{p.wins}}W - ${{p.losses}}L` : '-';
+                const loc = [p.city, p.state].filter(Boolean).join(', ') || '-';
+                const sec = p.section ? `<span class="badge badge-section">${{p.section}}</span>` : '-';
+                const link = p.profile_url ? `<a class="pname" href="${{p.profile_url}}" target="_blank">${{p.name}} ↗</a>` : p.name;
+                const rCount = (p.rankings||[]).length;
+                const btn = rCount > 0 ? `<button class="btn-view" onclick="openM('${{p.usta_id}}')">All (${{rCount}})</button>` : '-';
+
+                return `<tr>
+                    <td style="color:var(--muted); font-weight:700;">${{idx + 1}}</td>
+                    <td>${{link}}</td>
+                    <td><code>${{p.usta_id || 'N/A'}}</code></td>
+                    <td>${{nRank}}</td>
+                    <td>${{sRank}}</td>
+                    <td>${{dRank}}</td>
+                    <td>${{pts}}</td>
+                    <td>${{rec}}</td>
+                    <td>${{loc}}</td>
+                    <td>${{sec}}</td>
+                    <td>${{btn}}</td>
+                </tr>`;
+            }}).join('');
+        }}
+
+        function sortT(col) {{
+            if (sortCol === col) sortAsc = !sortAsc;
+            else {{ sortCol = col; sortAsc = true; }}
+            document.querySelectorAll('th').forEach(t => t.classList.remove('sorted-asc', 'sorted-desc'));
+            render();
+        }}
+
+        function openM(id) {{
+            const p = data.players.find(x => x.usta_id === id);
+            if (!p) return;
+            document.getElementById('mName').innerText = p.name;
+            document.getElementById('mList').innerHTML = (p.rankings || []).map(r => `
+                <div class="modal-item">
+                    <strong>${{r.displayLabel || 'Ranking'}}</strong><br>
+                    National: #${{r.rank?.national || 'N/A'}} &bull; Section: #${{r.rank?.section || 'N/A'}} &bull; Points: ${{r.points ?? '-'}}
+                </div>
+            `).join('');
+            document.getElementById('modal').style.display = 'flex';
+        }}
+
+        function closeM(e) {{
+            if (!e || e.target.id === 'modal' || e.target.tagName === 'BUTTON') {{
+                document.getElementById('modal').style.display = 'none';
+            }}
+        }}
+
+        function exportCSV() {{
+            const rows = data.players.map((p, i) => [i+1, `"${{p.name}}"`, p.usta_id||'', p.national_rank||'', p.section_rank||'', p.points||'', `"${{p.city||''}}"`, `"${{p.section||''}}"`]);
+            const csv = "Position,Name,USTA ID,National Rank,Section Rank,Points,City,Section\\n" + rows.map(r => r.join(',')).join('\\n');
+            const a = document.createElement('a');
+            a.href = 'data:text/csv;charset=utf-8,' + encodeURI(csv);
+            a.download = 'usta_standings.csv';
+            a.click();
+        }}
+
+        document.getElementById('search').addEventListener('input', render);
+        document.getElementById('statusFilter').addEventListener('change', render);
+        render();
+    </script>
+</body>
+</html>
+"""
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Fetch USTA tournament player rankings into an HTML dashboard.")
+    parser.add_argument(
+        "tournament",
+        nargs="?",
+        default="754482C7-13BA-4900-BE3B-FEE68EF50BE0",
+        help="USTA Tournament URL or UUID (default: Princeton B/G 12s)",
+    )
+    parser.add_argument(
+        "--list-name",
+        "-l",
+        default=DEFAULT_TARGET_LIST,
+        help=f"Target ranking list (default: '{DEFAULT_TARGET_LIST}')",
+    )
+    parser.add_argument(
+        "--output",
+        "-o",
+        default=None,
+        help="Path for generated HTML file (default: usta_rankings_<id>.html)",
+    )
+    parser.add_argument(
+        "--no-browser",
+        action="store_true",
+        help="Do not automatically open HTML file in default web browser",
+    )
+
+    args = parser.parse_args()
+
+    try:
+        t_id = extract_tournament_id(args.tournament)
+    except ValueError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"\n🎾 Fetching tournament roster & player rankings for ID: {t_id}")
+
+    def progress(curr, tot, name):
+        pct = int((curr / tot) * 100) if tot else 0
+        sys.stdout.write(f"\r[{('#' * (pct // 5)).ljust(20, '-')}] {pct}% ({curr}/{tot}) - {name[:25]:<25}")
+        sys.stdout.flush()
+
+    data = fetch_tournament_roster_with_rankings(t_id, max_workers=6, on_progress=progress)
+    print("\n")
+
+    t_details = data.get("tournament") or {}
+    players = data.get("players") or []
+    t_name = t_details.get("name", "Unknown Tournament")
+
+    print(f"✅ Loaded '{t_name}' with {len(players)} players.")
+    print(f"🎯 Target List: '{args.list_name}'")
+
+    html_content = generate_html(t_details, players, args.list_name)
+    out_file = args.output or f"usta_rankings_{t_id}.html"
+    abs_out = os.path.abspath(out_file)
+
+    with open(abs_out, "w", encoding="utf-8") as f:
+        f.write(html_content)
+
+    print(f"📄 Dashboard saved: {abs_out}")
+
+    # Print summary
+    processed = process_player_rankings(players, args.list_name)
+    ranked = [p for p in processed if p["has_target_rank"]]
+    print(f"🏆 Top 5 Players:")
+    for idx, p in enumerate(ranked[:5], 1):
+        print(f"  {idx}. {p['name']:<22} | Nat. Rank: #{p['national_rank']:<5} | Pts: {p['points'] or 0:<4} | {p['section']}")
+    print(f"Total: {len(ranked)} ranked / {len(players)} players.\n")
+
+    if not args.no_browser:
+        print(f"🌐 Opening dashboard in web browser...")
+        webbrowser.open(f"file:///{abs_out}")
+
+
+if __name__ == "__main__":
+    main()
