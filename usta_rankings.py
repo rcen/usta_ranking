@@ -22,6 +22,53 @@ import webbrowser
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional, List, Dict, Any, Callable
 
+try:
+    from utr_api import get_player_utr
+except ImportError:
+    # Embedded fallback for get_player_utr to keep script 100% standalone
+    def get_player_utr(name: str, city: Optional[str] = None, state: Optional[str] = None, timeout: int = 8) -> Dict[str, Any]:
+        import urllib.parse
+        clean_name = name.strip()
+        if not clean_name:
+            return {}
+        try:
+            url = f"https://app.utrsports.net/api/v2/search/players?query={urllib.parse.quote(clean_name)}"
+            headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json", "Referer": "https://app.utrsports.net/"}
+            req = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+            hits = data.get("hits") or []
+            if not hits:
+                return {}
+            # Match best candidate by location if provided
+            pid = str(hits[0].get("id") or "").strip()
+            if city or state:
+                for h in hits:
+                    loc = ((h.get("source") or {}).get("location") or {}).get("display", "").lower()
+                    if (city and city.lower() in loc) or (state and state.lower() in loc):
+                        pid = str(h.get("id") or "").strip()
+                        break
+            if not pid:
+                return {}
+            v2_url = f"https://app.utrsports.net/api/v2/player/{pid}"
+            req2 = urllib.request.Request(v2_url, headers=headers)
+            with urllib.request.urlopen(req2, timeout=timeout) as r2:
+                d2 = json.loads(r2.read().decode("utf-8"))
+            s_disp = d2.get("singlesUtrDisplay") or str(d2.get("singlesUtr") or "")
+            d_disp = d2.get("doublesUtrDisplay") or str(d2.get("doublesUtr") or "")
+            return {
+                "utr_id": pid,
+                "singles_utr": float(s_disp) if s_disp and s_disp != "0.00" else None,
+                "singles_utr_display": s_disp if s_disp and s_disp != "0.00" else "Unrated",
+                "doubles_utr": float(d_disp) if d_disp and d_disp != "0.00" else None,
+                "doubles_utr_display": d_disp if d_disp and d_disp != "0.00" else "Unrated",
+                "singles_reliability": d2.get("ratingProgressSingles"),
+                "doubles_reliability": d2.get("ratingProgressDoubles"),
+                "profile_url": f"https://app.utrsports.net/profiles/{pid}",
+            }
+        except Exception:
+            return {}
+
 # Ensure safe UTF-8 output on Windows consoles
 if hasattr(sys.stdout, "reconfigure"):
     try:
@@ -29,6 +76,7 @@ if hasattr(sys.stdout, "reconfigure"):
         sys.stderr.reconfigure(encoding="utf-8", errors="replace")
     except Exception:
         pass
+
 
 CLUBSPARK_GRAPHQL_URL = "https://prd-usta-kube-tournaments.clubspark.pro/graphql"
 USTA_RANKINGS_API_URL = "https://www.usta.com/usta/api?type=playerRankings"
@@ -207,10 +255,11 @@ def fetch_player_rankings(uaid: str, timeout: int = 12) -> List[Dict[str, Any]]:
 
 def fetch_tournament_roster_with_rankings(
     tournament_id: str,
-    max_workers: int = 6,
+    max_workers: int = 8,
     on_progress: Optional[Callable[[int, int, str], None]] = None,
+    fetch_utr: bool = True,
 ) -> Dict[str, Any]:
-    """Fetches tournament details, all registered players, and concurrently fetches rankings."""
+    """Fetches tournament details, all registered players, and concurrently fetches rankings and UTRs."""
     t_id = extract_tournament_id(tournament_id)
     details = fetch_tournament_details(t_id)
     players = fetch_tournament_players(t_id)
@@ -225,6 +274,10 @@ def fetch_tournament_roster_with_rankings(
         p = dict(player_dict)
         uid = p.get("usta_id")
         p["rankings"] = fetch_player_rankings(uid) if uid else []
+        if fetch_utr:
+            p["utr"] = get_player_utr(p.get("name", ""), city=p.get("city"), state=p.get("state"))
+        else:
+            p["utr"] = {}
         return p
 
     enriched_players = []
@@ -280,6 +333,16 @@ def process_player_rankings(players: List[Dict[str, Any]], target_list_name: str
             p_copy["district"] = ""
             p_copy["trend"] = "none"
 
+        # UTR data
+        utr_info = p.get("utr") or {}
+        p_copy["utr_singles"] = utr_info.get("singles_utr")
+        p_copy["utr_doubles"] = utr_info.get("doubles_utr")
+        p_copy["utr_singles_display"] = utr_info.get("singles_utr_display") or "-"
+        p_copy["utr_doubles_display"] = utr_info.get("doubles_utr_display") or "-"
+        p_copy["utr_singles_reliability"] = utr_info.get("singles_reliability")
+        p_copy["utr_doubles_reliability"] = utr_info.get("doubles_reliability")
+        p_copy["utr_profile_url"] = utr_info.get("profile_url")
+
         uaid = p.get("usta_id")
         p_copy["profile_url"] = (
             f"https://www.usta.com/en/home/play/player-search/profile.html#uaid={uaid}&tab=rankings" if uaid else None
@@ -288,6 +351,7 @@ def process_player_rankings(players: List[Dict[str, Any]], target_list_name: str
 
     processed.sort(key=lambda x: (0 if (x["national_rank"] is not None) else 1, x["national_rank"] or 999999, x["name"].lower()))
     return processed
+
 
 
 def generate_html(tournament: Dict[str, Any], players: List[Dict[str, Any]], target_list: str) -> str:
@@ -321,6 +385,7 @@ def generate_html(tournament: Dict[str, Any], players: List[Dict[str, Any]], tar
         .badge-court {{ background: rgba(34,197,94,0.2); color: #4ade80; border: 1px solid rgba(34,197,94,0.4); }}
         .badge-section {{ background: #fef3c7; color: #92400e; border: 1px solid #fde68a; }}
         .badge-unranked {{ background: #f1f5f9; color: #64748b; }}
+        .badge-utr {{ background: #e0f2fe; color: #0369a1; border: 1px solid #bae6fd; font-weight: 700; }}
         .banner {{ margin-top: 14px; background: rgba(255,255,255,0.08); border-left: 4px solid #38bdf8; padding: 10px 14px; border-radius: 6px; font-size: 0.95rem; }}
         .grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; margin-bottom: 20px; }}
         .stat {{ background: var(--card); padding: 18px; border-radius: 10px; border: 1px solid var(--border); }}
@@ -392,6 +457,8 @@ def generate_html(tournament: Dict[str, Any], players: List[Dict[str, Any]], tar
                         <th onclick="sortT('section_rank')">Sec. Rank</th>
                         <th onclick="sortT('district_rank')">Dist. Rank</th>
                         <th onclick="sortT('points')">Points</th>
+                        <th onclick="sortT('utr_singles')">UTR (S)</th>
+                        <th onclick="sortT('utr_doubles')">UTR (D)</th>
                         <th onclick="sortT('record')">Record (W-L)</th>
                         <th onclick="sortT('city')">Location</th>
                         <th onclick="sortT('section')">Section</th>
@@ -428,8 +495,18 @@ def generate_html(tournament: Dict[str, Any], players: List[Dict[str, Any]], tar
             }});
 
             list.sort((a, b) => {{
-                let valA = a[sortCol] ?? (sortCol.includes('rank') ? 999999 : (sortCol === 'points' ? -1 : ''));
-                let valB = b[sortCol] ?? (sortCol.includes('rank') ? 999999 : (sortCol === 'points' ? -1 : ''));
+                let valA = a[sortCol];
+                let valB = b[sortCol];
+                if (sortCol.includes('rank')) {{
+                    valA = valA ?? 999999;
+                    valB = valB ?? 999999;
+                }} else if (sortCol.startsWith('utr_') || sortCol === 'points') {{
+                    valA = valA ?? -1;
+                    valB = valB ?? -1;
+                }} else {{
+                    valA = valA ?? '';
+                    valB = valB ?? '';
+                }}
                 if (typeof valA === 'string') valA = valA.toLowerCase();
                 if (typeof valB === 'string') valB = valB.toLowerCase();
                 return (valA < valB ? -1 : 1) * (sortAsc ? 1 : -1);
@@ -440,6 +517,8 @@ def generate_html(tournament: Dict[str, Any], players: List[Dict[str, Any]], tar
                 const sRank = p.section_rank ? `#${{p.section_rank}}` : '-';
                 const dRank = p.district_rank ? `#${{p.district_rank}}` : '-';
                 const pts = p.points !== null ? `<strong>${{p.points}}</strong>` : '-';
+                const utrSingles = p.utr_singles ? `<a href="${{p.utr_profile_url || '#'}}" target="_blank" style="text-decoration:none;"><span class="badge badge-utr" title="Reliability: ${{p.utr_singles_reliability || 'N/A'}}">${{p.utr_singles_display}}</span></a>` : '<span style="color:var(--muted);">-</span>';
+                const utrDoubles = p.utr_doubles ? `<a href="${{p.utr_profile_url || '#'}}" target="_blank" style="text-decoration:none;"><span class="badge badge-utr" style="background:#f1f5f9;color:#475569;border-color:#cbd5e1;" title="Reliability: ${{p.utr_doubles_reliability || 'N/A'}}">${{p.utr_doubles_display}}</span></a>` : '<span style="color:var(--muted);">-</span>';
                 const rec = p.has_target_rank ? `${{p.wins}}W - ${{p.losses}}L` : '-';
                 const loc = [p.city, p.state].filter(Boolean).join(', ') || '-';
                 const sec = p.section ? `<span class="badge badge-section">${{p.section}}</span>` : '-';
@@ -455,6 +534,8 @@ def generate_html(tournament: Dict[str, Any], players: List[Dict[str, Any]], tar
                     <td>${{sRank}}</td>
                     <td>${{dRank}}</td>
                     <td>${{pts}}</td>
+                    <td>${{utrSingles}}</td>
+                    <td>${{utrDoubles}}</td>
                     <td>${{rec}}</td>
                     <td>${{loc}}</td>
                     <td>${{sec}}</td>
@@ -490,8 +571,8 @@ def generate_html(tournament: Dict[str, Any], players: List[Dict[str, Any]], tar
         }}
 
         function exportCSV() {{
-            const rows = data.players.map((p, i) => [i+1, `"${{p.name}}"`, p.usta_id||'', p.national_rank||'', p.section_rank||'', p.points||'', `"${{p.city||''}}"`, `"${{p.section||''}}"`]);
-            const csv = "Position,Name,USTA ID,National Rank,Section Rank,Points,City,Section\\n" + rows.map(r => r.join(',')).join('\\n');
+            const rows = data.players.map((p, i) => [i+1, `"${{p.name}}"`, p.usta_id||'', p.national_rank||'', p.section_rank||'', p.points||'', p.utr_singles||'', p.utr_doubles||'', `"${{p.city||''}}"`, `"${{p.section||''}}"`]);
+            const csv = "Position,Name,USTA ID,National Rank,Section Rank,Points,UTR Singles,UTR Doubles,City,Section\\n" + rows.map(r => r.join(',')).join('\\n');
             const a = document.createElement('a');
             a.href = 'data:text/csv;charset=utf-8,' + encodeURI(csv);
             a.download = 'usta_standings.csv';
@@ -532,6 +613,11 @@ def main():
         action="store_true",
         help="Do not automatically open HTML file in default web browser",
     )
+    parser.add_argument(
+        "--no-utr",
+        action="store_true",
+        help="Skip fetching UTR (Universal Tennis Rating) scores for players",
+    )
 
     args = parser.parse_args()
 
@@ -548,7 +634,9 @@ def main():
         sys.stdout.write(f"\r[{('#' * (pct // 5)).ljust(20, '-')}] {pct}% ({curr}/{tot}) - {name[:25]:<25}")
         sys.stdout.flush()
 
-    data = fetch_tournament_roster_with_rankings(t_id, max_workers=6, on_progress=progress)
+    data = fetch_tournament_roster_with_rankings(
+        t_id, max_workers=8, on_progress=progress, fetch_utr=not args.no_utr
+    )
     print("\n")
 
     t_details = data.get("tournament") or {}
@@ -572,7 +660,8 @@ def main():
     ranked = [p for p in processed if p["has_target_rank"]]
     print(f"🏆 Top 5 Players:")
     for idx, p in enumerate(ranked[:5], 1):
-        print(f"  {idx}. {p['name']:<22} | Nat. Rank: #{p['national_rank']:<5} | Pts: {p['points'] or 0:<4} | {p['section']}")
+        utr_str = f"UTR: {p['utr_singles_display']}" if p.get("utr_singles") else "UTR: -"
+        print(f"  {idx}. {p['name']:<22} | Nat. Rank: #{p['national_rank']:<5} | {utr_str:<10} | Pts: {p['points'] or 0:<4} | {p['section']}")
     print(f"Total: {len(ranked)} ranked / {len(players)} players.\n")
 
     if not args.no_browser:
