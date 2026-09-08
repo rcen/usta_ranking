@@ -14,8 +14,8 @@ A standalone Python utility that extracts tournament player rosters from USTA (`
   - Public USTA Sanction Tournament ID (e.g. `26-17452`, automatically resolved via search API)
   - Tournament database UUID (e.g. `754482C7-13BA-4900-BE3B-FEE68EF50BE0`)
 - **Self-Contained Interactive HTML Dashboard**:
-  - **Live Search**: Instant filtering by player name, city, state, or section.
-  - **Two-Way Column Sorting**: Sort by National Rank, Section Rank, District Rank, Points, UTR Singles, UTR Doubles, Match Record (W/L), Name, etc.
+  - **Live Search**: Instant filtering by player name, city, or state.
+  - **Two-Way Column Sorting**: Sort by National Rank, Section Rank, Points, UTR Singles, UTR Doubles, Match Record (W/L), Name, etc.
   - **All-Rankings Modal**: Click on any player to see all ranking lists they hold (Quota, Seeding, other age divisions).
   - **Direct Profile Links**: One-click links directly to each player's official USTA profile page and UTR profile.
   - **CSV Export**: Export the ranked tournament roster (including UTR ratings) to CSV with a single click.

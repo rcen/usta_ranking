@@ -455,13 +455,11 @@ def generate_html(tournament: Dict[str, Any], players: List[Dict[str, Any]], tar
                         <th onclick="sortT('usta_id')">USTA ID</th>
                         <th onclick="sortT('national_rank')" class="sorted-asc">Nat. Rank</th>
                         <th onclick="sortT('section_rank')">Sec. Rank</th>
-                        <th onclick="sortT('district_rank')">Dist. Rank</th>
                         <th onclick="sortT('points')">Points</th>
                         <th onclick="sortT('utr_singles')">UTR (S)</th>
                         <th onclick="sortT('utr_doubles')">UTR (D)</th>
                         <th onclick="sortT('record')">Record (W-L)</th>
                         <th onclick="sortT('city')">Location</th>
-                        <th onclick="sortT('section')">Section</th>
                         <th>All Rankings</th>
                     </tr>
                 </thead>
@@ -491,7 +489,7 @@ def generate_html(tournament: Dict[str, Any], players: List[Dict[str, Any]], tar
                 if (status === 'ranked' && !p.has_target_rank) return false;
                 if (status === 'unranked' && p.has_target_rank) return false;
                 if (!search) return true;
-                return (p.name||'').toLowerCase().includes(search) || (p.city||'').toLowerCase().includes(search) || (p.section||'').toLowerCase().includes(search);
+                return (p.name||'').toLowerCase().includes(search) || (p.city||'').toLowerCase().includes(search);
             }});
 
             list.sort((a, b) => {{
@@ -515,13 +513,11 @@ def generate_html(tournament: Dict[str, Any], players: List[Dict[str, Any]], tar
             document.getElementById('tbody').innerHTML = list.map((p, idx) => {{
                 const nRank = p.national_rank ? `#${{p.national_rank}}` : '<span class="badge badge-unranked">Unranked</span>';
                 const sRank = p.section_rank ? `#${{p.section_rank}}` : '-';
-                const dRank = p.district_rank ? `#${{p.district_rank}}` : '-';
                 const pts = p.points !== null ? `<strong>${{p.points}}</strong>` : '-';
                 const utrSingles = p.utr_singles ? `<a href="${{p.utr_profile_url || '#'}}" target="_blank" style="text-decoration:none;"><span class="badge badge-utr" title="Reliability: ${{p.utr_singles_reliability || 'N/A'}}">${{p.utr_singles_display}}</span></a>` : '<span style="color:var(--muted);">-</span>';
                 const utrDoubles = p.utr_doubles ? `<a href="${{p.utr_profile_url || '#'}}" target="_blank" style="text-decoration:none;"><span class="badge badge-utr" style="background:#f1f5f9;color:#475569;border-color:#cbd5e1;" title="Reliability: ${{p.utr_doubles_reliability || 'N/A'}}">${{p.utr_doubles_display}}</span></a>` : '<span style="color:var(--muted);">-</span>';
                 const rec = p.has_target_rank ? `${{p.wins}}W - ${{p.losses}}L` : '-';
                 const loc = [p.city, p.state].filter(Boolean).join(', ') || '-';
-                const sec = p.section ? `<span class="badge badge-section">${{p.section}}</span>` : '-';
                 const link = p.profile_url ? `<a class="pname" href="${{p.profile_url}}" target="_blank">${{p.name}} ↗</a>` : p.name;
                 const rCount = (p.rankings||[]).length;
                 const btn = rCount > 0 ? `<button class="btn-view" onclick="openM('${{p.usta_id}}')">All (${{rCount}})</button>` : '-';
@@ -532,13 +528,11 @@ def generate_html(tournament: Dict[str, Any], players: List[Dict[str, Any]], tar
                     <td><code>${{p.usta_id || 'N/A'}}</code></td>
                     <td>${{nRank}}</td>
                     <td>${{sRank}}</td>
-                    <td>${{dRank}}</td>
                     <td>${{pts}}</td>
                     <td>${{utrSingles}}</td>
                     <td>${{utrDoubles}}</td>
                     <td>${{rec}}</td>
                     <td>${{loc}}</td>
-                    <td>${{sec}}</td>
                     <td>${{btn}}</td>
                 </tr>`;
             }}).join('');
@@ -571,8 +565,8 @@ def generate_html(tournament: Dict[str, Any], players: List[Dict[str, Any]], tar
         }}
 
         function exportCSV() {{
-            const rows = data.players.map((p, i) => [i+1, `"${{p.name}}"`, p.usta_id||'', p.national_rank||'', p.section_rank||'', p.points||'', p.utr_singles||'', p.utr_doubles||'', `"${{p.city||''}}"`, `"${{p.section||''}}"`]);
-            const csv = "Position,Name,USTA ID,National Rank,Section Rank,Points,UTR Singles,UTR Doubles,City,Section\\n" + rows.map(r => r.join(',')).join('\\n');
+            const rows = data.players.map((p, i) => [i+1, `"${{p.name}}"`, p.usta_id||'', p.national_rank||'', p.section_rank||'', p.points||'', p.utr_singles||'', p.utr_doubles||'', `"${{p.city||''}}"`]);
+            const csv = "Position,Name,USTA ID,National Rank,Section Rank,Points,UTR Singles,UTR Doubles,City\\n" + rows.map(r => r.join(',')).join('\\n');
             const a = document.createElement('a');
             a.href = 'data:text/csv;charset=utf-8,' + encodeURI(csv);
             a.download = 'usta_standings.csv';
@@ -661,7 +655,7 @@ def main():
     print(f"🏆 Top 5 Players:")
     for idx, p in enumerate(ranked[:5], 1):
         utr_str = f"UTR: {p['utr_singles_display']}" if p.get("utr_singles") else "UTR: -"
-        print(f"  {idx}. {p['name']:<22} | Nat. Rank: #{p['national_rank']:<5} | {utr_str:<10} | Pts: {p['points'] or 0:<4} | {p['section']}")
+        print(f"  {idx}. {p['name']:<22} | Nat. Rank: #{p['national_rank']:<5} | {utr_str:<10} | Pts: {p['points'] or 0:<4}")
     print(f"Total: {len(ranked)} ranked / {len(players)} players.\n")
 
     if not args.no_browser:
