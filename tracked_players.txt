@@ -1,0 +1,9 @@
+# Tracked Players List
+# ====================
+# Add one player name or USTA Account ID (UAID) per row.
+# Lines starting with '#' and blank lines are ignored.
+# Matching is case-insensitive and supports "First Last" or "Last, First".
+#
+# Examples:
+# Joe Smith
+

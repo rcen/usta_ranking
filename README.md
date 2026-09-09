@@ -9,16 +9,18 @@ A standalone Python utility that extracts tournament player rosters from USTA (`
 - **Zero Dependencies**: Uses only standard Python 3 (`urllib`, `json`, `hmac`, `hashlib`, `webbrowser`). No `pip install` or external packages required.
 - **Direct API Integration**: Reverse-engineers USTA's Clubspark GraphQL endpoint and player ranking APIs (with HMAC-SHA256 authentication) to pull rosters and standings in seconds.
 - **Live UTR Rating Integration**: Concurrently queries Universal Tennis Rating (UTR singles and doubles, two-decimal accuracy) with geographic location disambiguation.
+- **Tracked Players Config & Highlighted Border**: Provide a `tracked_players.txt` file (one player name or UAID per line); matching players are highlighted with a prominent gold border and badge in the interactive dashboard, included in a "Tracked Only" filter, and marked in console output.
 - **Multiple Input Formats Supported**:
   - Full Tournament URL (e.g. `https://playtennis.usta.com/.../players/<id>`)
   - Public USTA Sanction Tournament ID (e.g. `26-17452`, automatically resolved via search API)
   - Tournament database UUID (e.g. `754482C7-13BA-4900-BE3B-FEE68EF50BE0`)
 - **Self-Contained Interactive HTML Dashboard**:
-  - **Live Search**: Instant filtering by player name, city, or state.
+  - **Live Search & Tracked Filter**: Instant filtering by player name, city, state, or filter to "Tracked Only".
+  - **Highlighted Player Border**: Tracked players feature a prominent glowing amber border (`border: 2.5px solid #d97706`) and `★ Tracked` badge.
   - **Two-Way Column Sorting**: Sort by National Rank, Section Rank, Points, UTR Singles, UTR Doubles, Match Record (W/L), Name, etc.
   - **All-Rankings Modal**: Click on any player to see all ranking lists they hold (Quota, Seeding, other age divisions).
   - **Direct Profile Links**: One-click links directly to each player's official USTA profile page and UTR profile.
-  - **CSV Export**: Export the ranked tournament roster (including UTR ratings) to CSV with a single click.
+  - **CSV Export**: Export the ranked tournament roster (including UTR ratings and Tracked status) to CSV with a single click.
   - **Automatic Browser Launch**: Automatically opens the generated dashboard in your default browser.
 
 ---
@@ -30,22 +32,36 @@ A standalone Python utility that extracts tournament player rosters from USTA (`
 python usta_rankings.py
 ```
 
-### 2. Run with any tournament URL:
+### 2. Track specific players via config file:
+Create `tracked_players.txt` in the folder (or use `--tracked <file>`) with one name or UAID per line:
+```text
+# tracked_players.txt
+2019333897
+Austin He
+Shlok Donga
+```
+Run as normal:
+```bash
+python usta_rankings.py 26-17452
+```
+Matching players will have a prominent highlighted border in the HTML dashboard and be marked with `⭐` in the terminal.
+
+### 3. Run with any tournament URL:
 ```bash
 python usta_rankings.py "https://playtennis.usta.com/Competitions/princetontennisprogram/Tournaments/players/754482C7-13BA-4900-BE3B-FEE68EF50BE0"
 ```
 
-### 3. Run with a USTA Sanction Tournament ID directly:
+### 4. Run with a USTA Sanction Tournament ID directly:
 ```bash
 python usta_rankings.py 26-17452
 ```
 
-### 4. Check a different age division (e.g. Boys' 14 or Girls' 12):
+### 5. Check a different age division (e.g. Boys' 14 or Girls' 12):
 ```bash
 python usta_rankings.py 26-17452 --list-name "Boys' 14 National Standings List (combined)"
 ```
 
-### 5. Skip UTR lookup to speed up execution:
+### 6. Skip UTR lookup to speed up execution:
 ```bash
 python usta_rankings.py 26-17452 --no-utr
 ```
@@ -59,6 +75,7 @@ python usta_rankings.py 26-17452 --no-utr
 | `tournament` | Tournament URL, UUID, or Sanction ID (e.g. `26-17452`) | Default tournament |
 | `--list-name`, `-l` | Target ranking list name to match | `"Boys' 12 National Standings List (combined)"` |
 | `--output`, `-o` | Custom output HTML filename | `usta_rankings_<id>.html` |
+| `--tracked`, `-t` | Path to text config file of tracked players | `tracked_players.txt` (if present) |
 | `--no-browser` | Generate HTML file without auto-opening in browser | `False` |
 | `--no-utr` | Skip fetching UTR scores for players | `False` |
 

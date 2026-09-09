@@ -20,7 +20,66 @@ import hashlib
 import argparse
 import webbrowser
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Optional, List, Dict, Any, Callable
+from typing import Optional, List, Dict, Any, Callable, Set
+
+def load_tracked_players(config_path: Optional[str] = None) -> Set[str]:
+    """
+    Loads tracked player names and USTA IDs from a text configuration file.
+    Each row contains a player's name or numeric USTA ID.
+    Ignores empty lines and comments starting with '#'.
+    """
+    path_to_try = config_path
+    if not path_to_try:
+        candidates = [
+            "tracked_players.txt",
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), "tracked_players.txt"),
+            "watchlist.txt",
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), "watchlist.txt"),
+        ]
+        for c in candidates:
+            if os.path.isfile(c):
+                path_to_try = c
+                break
+
+    if not path_to_try or not os.path.isfile(path_to_try):
+        return set()
+
+    tracked = set()
+    try:
+        with open(path_to_try, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                tracked.add(line.lower())
+    except Exception as e:
+        print(f"Warning: Could not read tracked players file '{path_to_try}': {e}", file=sys.stderr)
+
+    return tracked
+
+
+def is_player_tracked(player: Dict[str, Any], tracked_set: Set[str]) -> bool:
+    """Checks if a player matches any tracked USTA ID or name."""
+    if not tracked_set:
+        return False
+
+    uid = str(player.get("usta_id") or "").strip().lower()
+    if uid and uid in tracked_set:
+        return True
+
+    name = (player.get("name") or "").strip().lower()
+    if name and name in tracked_set:
+        return True
+
+    # Also match reversed name (e.g. "He, Austin" vs "Austin He")
+    cleaned_name_parts = re.split(r"[\s,]+", name)
+    cleaned_name_sorted = " ".join(sorted(filter(None, cleaned_name_parts)))
+    for t in tracked_set:
+        t_parts = re.split(r"[\s,]+", t)
+        if " ".join(sorted(filter(None, t_parts))) == cleaned_name_sorted:
+            return True
+
+    return False
 
 try:
     from utr_api import get_player_utr
@@ -293,7 +352,11 @@ def fetch_tournament_roster_with_rankings(
     return {"tournament": details, "players": enriched_players}
 
 
-def process_player_rankings(players: List[Dict[str, Any]], target_list_name: str) -> List[Dict[str, Any]]:
+def process_player_rankings(
+    players: List[Dict[str, Any]],
+    target_list_name: str,
+    tracked_players: Optional[Set[str]] = None,
+) -> List[Dict[str, Any]]:
     """Filters player data specifically for the target standings list and sorts by rank."""
     processed = []
     target_lower = target_list_name.strip().lower()
@@ -347,6 +410,7 @@ def process_player_rankings(players: List[Dict[str, Any]], target_list_name: str
         p_copy["profile_url"] = (
             f"https://www.usta.com/en/home/play/player-search/profile.html#uaid={uaid}&tab=rankings" if uaid else None
         )
+        p_copy["is_tracked"] = is_player_tracked(p_copy, tracked_players or set())
         processed.append(p_copy)
 
     processed.sort(key=lambda x: (0 if (x["national_rank"] is not None) else 1, x["national_rank"] or 999999, x["name"].lower()))
@@ -354,12 +418,18 @@ def process_player_rankings(players: List[Dict[str, Any]], target_list_name: str
 
 
 
-def generate_html(tournament: Dict[str, Any], players: List[Dict[str, Any]], target_list: str) -> str:
+def generate_html(
+    tournament: Dict[str, Any],
+    players: List[Dict[str, Any]],
+    target_list: str,
+    tracked_players: Optional[Set[str]] = None,
+) -> str:
     """Creates a standalone, interactive HTML dashboard."""
-    processed = process_player_rankings(players, target_list)
+    processed = process_player_rankings(players, target_list, tracked_players=tracked_players)
     total_players = len(processed)
     ranked = [p for p in processed if p["has_target_rank"]]
     best_rank = min((p["national_rank"] for p in ranked if p["national_rank"]), default="N/A")
+    tracked_count = sum(1 for p in processed if p.get("is_tracked"))
     t_name = tournament.get("name") or f"Tournament {tournament.get('id', '')}"
     t_org = tournament.get("organisation", {}).get("name") or "USTA Tournament"
     t_id = tournament.get("id", "")
@@ -386,6 +456,10 @@ def generate_html(tournament: Dict[str, Any], players: List[Dict[str, Any]], tar
         .badge-section {{ background: #fef3c7; color: #92400e; border: 1px solid #fde68a; }}
         .badge-unranked {{ background: #f1f5f9; color: #64748b; }}
         .badge-utr {{ background: #e0f2fe; color: #0369a1; border: 1px solid #bae6fd; font-weight: 700; }}
+        .badge-tracked {{ display: inline-flex; align-items: center; padding: 2px 7px; background: #d97706; color: #ffffff; border-radius: 4px; font-size: 0.7rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.5px; margin-right: 8px; vertical-align: middle; box-shadow: 0 1px 2px rgba(0,0,0,0.15); }}
+        td.cell-tracked {{ border: 2.5px solid #d97706 !important; outline: 2px solid #f59e0b; outline-offset: -2px; background-color: #fffbeb !important; font-weight: 700; border-radius: 4px; box-shadow: 0 0 10px rgba(245, 158, 11, 0.35); position: relative; }}
+        tr.row-tracked {{ background-color: rgba(254, 243, 199, 0.22) !important; }}
+        tr.row-tracked:hover td {{ background-color: rgba(254, 243, 199, 0.45) !important; }}
         .banner {{ margin-top: 14px; background: rgba(255,255,255,0.08); border-left: 4px solid #38bdf8; padding: 10px 14px; border-radius: 6px; font-size: 0.95rem; }}
         .grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; margin-bottom: 20px; }}
         .stat {{ background: var(--card); padding: 18px; border-radius: 10px; border: 1px solid var(--border); }}
@@ -434,14 +508,16 @@ def generate_html(tournament: Dict[str, Any], players: List[Dict[str, Any]], tar
             <div class="stat"><div class="stat-lbl">Ranked Players</div><div class="stat-val" style="color: var(--primary);">{len(ranked)}</div></div>
             <div class="stat"><div class="stat-lbl">Top National Rank</div><div class="stat-val" style="color: #16a34a;">#{best_rank}</div></div>
             <div class="stat"><div class="stat-lbl">Unranked</div><div class="stat-val" style="color: var(--muted);">{total_players - len(ranked)}</div></div>
+            {f'<div class="stat"><div class="stat-lbl">Tracked Players</div><div class="stat-val" style="color: #d97706;">★ {tracked_count}</div></div>' if tracked_count > 0 else ''}
         </div>
 
         <div class="controls">
-            <input type="text" id="search" placeholder="Search name, city, state, or section...">
+            <input type="text" id="search" placeholder="Search name, city, or state...">
             <select id="statusFilter">
                 <option value="all">All Players ({total_players})</option>
                 <option value="ranked">Ranked Only ({len(ranked)})</option>
                 <option value="unranked">Unranked Only ({total_players - len(ranked)})</option>
+                {f'<option value="tracked">⭐ Tracked Only ({tracked_count})</option>' if tracked_count > 0 else ''}
             </select>
             <button onclick="exportCSV()">Export CSV</button>
         </div>
@@ -488,6 +564,7 @@ def generate_html(tournament: Dict[str, Any], players: List[Dict[str, Any]], tar
             let list = data.players.filter(p => {{
                 if (status === 'ranked' && !p.has_target_rank) return false;
                 if (status === 'unranked' && p.has_target_rank) return false;
+                if (status === 'tracked' && !p.is_tracked) return false;
                 if (!search) return true;
                 return (p.name||'').toLowerCase().includes(search) || (p.city||'').toLowerCase().includes(search);
             }});
@@ -521,10 +598,14 @@ def generate_html(tournament: Dict[str, Any], players: List[Dict[str, Any]], tar
                 const link = p.profile_url ? `<a class="pname" href="${{p.profile_url}}" target="_blank">${{p.name}} ↗</a>` : p.name;
                 const rCount = (p.rankings||[]).length;
                 const btn = rCount > 0 ? `<button class="btn-view" onclick="openM('${{p.usta_id}}')">All (${{rCount}})</button>` : '-';
+                const isTracked = p.is_tracked;
+                const trackedBadge = isTracked ? '<span class="badge-tracked">&#9733; Tracked</span> ' : '';
+                const nameCellClass = isTracked ? 'class="cell-tracked"' : '';
+                const rowClass = isTracked ? 'class="row-tracked"' : '';
 
-                return `<tr>
+                return `<tr ${{rowClass}}>
                     <td style="color:var(--muted); font-weight:700;">${{idx + 1}}</td>
-                    <td>${{link}}</td>
+                    <td ${{nameCellClass}}>${{trackedBadge}}${{link}}</td>
                     <td><code>${{p.usta_id || 'N/A'}}</code></td>
                     <td>${{nRank}}</td>
                     <td>${{sRank}}</td>
@@ -565,8 +646,8 @@ def generate_html(tournament: Dict[str, Any], players: List[Dict[str, Any]], tar
         }}
 
         function exportCSV() {{
-            const rows = data.players.map((p, i) => [i+1, `"${{p.name}}"`, p.usta_id||'', p.national_rank||'', p.section_rank||'', p.points||'', p.utr_singles||'', p.utr_doubles||'', `"${{p.city||''}}"`]);
-            const csv = "Position,Name,USTA ID,National Rank,Section Rank,Points,UTR Singles,UTR Doubles,City\\n" + rows.map(r => r.join(',')).join('\\n');
+            const rows = data.players.map((p, i) => [i+1, `"${{p.name}}"`, p.usta_id||'', p.national_rank||'', p.section_rank||'', p.points||'', p.utr_singles||'', p.utr_doubles||'', `"${{p.city||''}}"`, p.is_tracked ? 'YES' : 'NO']);
+            const csv = "Position,Name,USTA ID,National Rank,Section Rank,Points,UTR Singles,UTR Doubles,City,Tracked\\n" + rows.map(r => r.join(',')).join('\\n');
             const a = document.createElement('a');
             a.href = 'data:text/csv;charset=utf-8,' + encodeURI(csv);
             a.download = 'usta_standings.csv';
@@ -612,6 +693,13 @@ def main():
         action="store_true",
         help="Skip fetching UTR (Universal Tennis Rating) scores for players",
     )
+    parser.add_argument(
+        "--tracked",
+        "-t",
+        dest="tracked_file",
+        default=None,
+        help="Path to config file of tracked player names or USTA IDs (default: tracked_players.txt if present)",
+    )
 
     args = parser.parse_args()
 
@@ -622,6 +710,12 @@ def main():
         sys.exit(1)
 
     print(f"\n🎾 Fetching tournament roster & player rankings for ID: {t_id}")
+
+    # Load tracked players config if available
+    tracked_set = load_tracked_players(args.tracked_file)
+    if tracked_set:
+        src = args.tracked_file or "tracked_players.txt"
+        print(f"⭐ Loaded {len(tracked_set)} tracked player pattern(s) from '{src}'")
 
     def progress(curr, tot, name):
         pct = int((curr / tot) * 100) if tot else 0
@@ -640,7 +734,7 @@ def main():
     print(f"✅ Loaded '{t_name}' with {len(players)} players.")
     print(f"🎯 Target List: '{args.list_name}'")
 
-    html_content = generate_html(t_details, players, args.list_name)
+    html_content = generate_html(t_details, players, args.list_name, tracked_players=tracked_set)
     out_file = args.output or f"usta_rankings_{t_id}.html"
     abs_out = os.path.abspath(out_file)
 
@@ -650,13 +744,25 @@ def main():
     print(f"📄 Dashboard saved: {abs_out}")
 
     # Print summary
-    processed = process_player_rankings(players, args.list_name)
+    processed = process_player_rankings(players, args.list_name, tracked_players=tracked_set)
     ranked = [p for p in processed if p["has_target_rank"]]
     print(f"🏆 Top 5 Players:")
     for idx, p in enumerate(ranked[:5], 1):
+        star = "⭐ " if p.get("is_tracked") else "   "
         utr_str = f"UTR: {p['utr_singles_display']}" if p.get("utr_singles") else "UTR: -"
-        print(f"  {idx}. {p['name']:<22} | Nat. Rank: #{p['national_rank']:<5} | {utr_str:<10} | Pts: {p['points'] or 0:<4}")
+        print(f"  {star}{idx}. {p['name']:<22} | Nat. Rank: #{p['national_rank']:<5} | {utr_str:<10} | Pts: {p['points'] or 0:<4}")
     print(f"Total: {len(ranked)} ranked / {len(players)} players.\n")
+
+    # If tracked players found in tournament, display them specifically
+    tracked_matches = [p for p in processed if p.get("is_tracked")]
+    if tracked_matches:
+        print(f"⭐ Tracked Players in this Tournament ({len(tracked_matches)}):")
+        for p in tracked_matches:
+            n_rank = f"#{p['national_rank']}" if p.get("national_rank") else "Unranked"
+            utr_str = f"UTR: {p['utr_singles_display']}" if p.get("utr_singles") else "UTR: -"
+            pts_str = f"{p['points']} pts" if p.get("points") is not None else "- pts"
+            print(f"   ★ {p['name']:<22} | Nat. Rank: {n_rank:<8} | {utr_str:<10} | {pts_str:<8} | ID: {p.get('usta_id') or 'N/A'}")
+        print()
 
     if not args.no_browser:
         print(f"🌐 Opening dashboard in web browser...")
