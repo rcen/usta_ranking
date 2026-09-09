@@ -16,8 +16,8 @@ A standalone Python utility that extracts tournament player rosters from USTA (`
   - Tournament database UUID (e.g. `754482C7-13BA-4900-BE3B-FEE68EF50BE0`)
 - **Self-Contained Interactive HTML Dashboard**:
   - **Live Search & Tracked Filter**: Instant filtering by player name, city, state, or filter to "Tracked Only".
-  - **Highlighted Player Border**: Tracked players feature a prominent glowing amber border (`border: 2.5px solid #d97706`) and `★ Tracked` badge.
-  - **Two-Way Column Sorting**: Sort by National Rank, Section Rank, Points, UTR Singles, UTR Doubles, Match Record (W/L), Name, etc.
+  - **Highlighted Player Row**: Tracked players feature a prominent glowing amber border encircling the whole row and a ⭐ icon next to their name.
+  - **Two-Way Column Sorting**: Sort by UTR, National Rank, Section Rank, Points, Match Record (W/L), Name, etc.
   - **All-Rankings Modal**: Click on any player to see all ranking lists they hold (Quota, Seeding, other age divisions).
   - **Direct Profile Links**: One-click links directly to each player's official USTA profile page and UTR profile.
   - **CSV Export**: Export the ranked tournament roster (including UTR ratings and Tracked status) to CSV with a single click.

@@ -528,16 +528,14 @@ def generate_html(
             <table>
                 <thead>
                     <tr>
-                        <th onclick="sortT('pos')">#</th>
-                        <th onclick="sortT('name')">Player Name</th>
-                        <th onclick="sortT('usta_id')">USTA ID</th>
-                        <th onclick="sortT('national_rank')" class="sorted-asc">Nat. Rank</th>
-                        <th onclick="sortT('section_rank')">Sec. Rank</th>
-                        <th onclick="sortT('points')">Points</th>
-                        <th onclick="sortT('utr_singles')">UTR (S)</th>
-                        <th onclick="sortT('utr_doubles')">UTR (D)</th>
-                        <th onclick="sortT('record')">Record (W-L)</th>
-                        <th onclick="sortT('city')">Location</th>
+                        <th onclick="sortT('pos', this)">#</th>
+                        <th onclick="sortT('name', this)">Player Name</th>
+                        <th onclick="sortT('utr', this)">UTR</th>
+                        <th onclick="sortT('national_rank', this)" class="sorted-asc">Nat. Rank</th>
+                        <th onclick="sortT('section_rank', this)">Sec. Rank</th>
+                        <th onclick="sortT('points', this)">Points</th>
+                        <th onclick="sortT('record', this)">Record (W-L)</th>
+                        <th onclick="sortT('city', this)">Location</th>
                         <th>All Rankings</th>
                     </tr>
                 </thead>
@@ -568,13 +566,16 @@ def generate_html(
                 if (status === 'unranked' && p.has_target_rank) return false;
                 if (status === 'tracked' && !p.is_tracked) return false;
                 if (!search) return true;
-                return (p.name||'').toLowerCase().includes(search) || (p.city||'').toLowerCase().includes(search);
+                return (p.name||'').toLowerCase().includes(search) || (p.city||'').toLowerCase().includes(search) || (p.usta_id||'').includes(search);
             }});
 
             list.sort((a, b) => {{
                 let valA = a[sortCol];
                 let valB = b[sortCol];
-                if (sortCol.includes('rank')) {{
+                if (sortCol === 'utr') {{
+                    valA = a.utr_singles ?? a.utr_doubles ?? -1;
+                    valB = b.utr_singles ?? b.utr_doubles ?? -1;
+                }} else if (sortCol.includes('rank')) {{
                     valA = valA ?? 999999;
                     valB = valB ?? 999999;
                 }} else if (sortCol.startsWith('utr_') || sortCol === 'points') {{
@@ -592,12 +593,24 @@ def generate_html(
             document.getElementById('tbody').innerHTML = list.map((p, idx) => {{
                 const nRank = p.national_rank ? `#${{p.national_rank}}` : '<span class="badge badge-unranked">Unranked</span>';
                 const sRank = p.section_rank ? `#${{p.section_rank}}` : '-';
-                const pts = p.points !== null ? `<strong>${{p.points}}</strong>` : '-';
-                const utrSingles = p.utr_singles ? `<a href="${{p.utr_profile_url || '#'}}" target="_blank" style="text-decoration:none;"><span class="badge badge-utr" title="Reliability: ${{p.utr_singles_reliability || 'N/A'}}">${{p.utr_singles_display}}</span></a>` : '<span style="color:var(--muted);">-</span>';
-                const utrDoubles = p.utr_doubles ? `<a href="${{p.utr_profile_url || '#'}}" target="_blank" style="text-decoration:none;"><span class="badge badge-utr" style="background:#f1f5f9;color:#475569;border-color:#cbd5e1;" title="Reliability: ${{p.utr_doubles_reliability || 'N/A'}}">${{p.utr_doubles_display}}</span></a>` : '<span style="color:var(--muted);">-</span>';
+                const pts = p.points !== null ? p.points : '-';
+
+                let utrCell = '<span style="color:var(--muted);">-</span>';
+                if (p.utr_singles || p.utr_doubles) {{
+                    const badges = [];
+                    if (p.utr_singles) {{
+                        badges.push(`<span class="badge badge-utr" title="Singles UTR (Reliability: ${{p.utr_singles_reliability || 'N/A'}})">${{p.utr_singles_display}}</span>`);
+                    }}
+                    if (p.utr_doubles) {{
+                        badges.push(`<span class="badge badge-utr" style="background:#f1f5f9;color:#475569;border-color:#cbd5e1;font-size:0.75rem;" title="Doubles UTR (Reliability: ${{p.utr_doubles_reliability || 'N/A'}})">D: ${{p.utr_doubles_display}}</span>`);
+                    }}
+                    const utrUrl = p.utr_profile_url || '#';
+                    utrCell = `<a href="${{utrUrl}}" target="_blank" style="text-decoration:none; display:inline-flex; align-items:center; gap:4px;">${{badges.join('')}}</a>`;
+                }}
+
                 const rec = p.has_target_rank ? `${{p.wins}}W - ${{p.losses}}L` : '-';
                 const loc = [p.city, p.state].filter(Boolean).join(', ') || '-';
-                const link = p.profile_url ? `<a class="pname" href="${{p.profile_url}}" target="_blank">${{p.name}} ↗</a>` : p.name;
+                const link = p.profile_url ? `<a class="pname" href="${{p.profile_url}}" target="_blank" title="USTA ID: ${{p.usta_id || 'N/A'}}">${{p.name}} ↗</a>` : p.name;
                 const rCount = (p.rankings||[]).length;
                 const btn = rCount > 0 ? `<button class="btn-view" onclick="openM('${{p.usta_id}}')">All (${{rCount}})</button>` : '-';
                 const isTracked = p.is_tracked;
@@ -607,12 +620,10 @@ def generate_html(
                 return `<tr ${{rowClass}}>
                     <td style="color:var(--muted); font-weight:700;">${{idx + 1}}</td>
                     <td>${{starIcon}}${{link}}</td>
-                    <td><code>${{p.usta_id || 'N/A'}}</code></td>
+                    <td>${{utrCell}}</td>
                     <td>${{nRank}}</td>
                     <td>${{sRank}}</td>
                     <td>${{pts}}</td>
-                    <td>${{utrSingles}}</td>
-                    <td>${{utrDoubles}}</td>
                     <td>${{rec}}</td>
                     <td>${{loc}}</td>
                     <td>${{btn}}</td>
@@ -620,17 +631,24 @@ def generate_html(
             }}).join('');
         }}
 
-        function sortT(col) {{
-            if (sortCol === col) sortAsc = !sortAsc;
-            else {{ sortCol = col; sortAsc = true; }}
+        function sortT(col, elem) {{
+            if (sortCol === col) {{
+                sortAsc = !sortAsc;
+            }} else {{
+                sortCol = col;
+                sortAsc = (col === 'utr' || col.startsWith('utr_') || col === 'points') ? false : true;
+            }}
             document.querySelectorAll('th').forEach(t => t.classList.remove('sorted-asc', 'sorted-desc'));
+            if (elem) {{
+                elem.classList.add(sortAsc ? 'sorted-asc' : 'sorted-desc');
+            }}
             render();
         }}
 
         function openM(id) {{
             const p = data.players.find(x => x.usta_id === id);
             if (!p) return;
-            document.getElementById('mName').innerText = p.name;
+            document.getElementById('mName').innerText = p.name + (p.usta_id ? ` (USTA ID: ${{p.usta_id}})` : '');
             document.getElementById('mList').innerHTML = (p.rankings || []).map(r => `
                 <div class="modal-item">
                     <strong>${{r.displayLabel || 'Ranking'}}</strong><br>
@@ -647,8 +665,8 @@ def generate_html(
         }}
 
         function exportCSV() {{
-            const rows = data.players.map((p, i) => [i+1, `"${{p.name}}"`, p.usta_id||'', p.national_rank||'', p.section_rank||'', p.points||'', p.utr_singles||'', p.utr_doubles||'', `"${{p.city||''}}"`, p.is_tracked ? 'YES' : 'NO']);
-            const csv = "Position,Name,USTA ID,National Rank,Section Rank,Points,UTR Singles,UTR Doubles,City,Tracked\\n" + rows.map(r => r.join(',')).join('\\n');
+            const rows = data.players.map((p, i) => [i+1, `"${{p.name}}"`, p.utr_singles||'', p.utr_doubles||'', p.national_rank||'', p.section_rank||'', p.points||'', `"${{p.city||''}}"`, p.usta_id||'', p.is_tracked ? 'YES' : 'NO']);
+            const csv = "Position,Name,UTR Singles,UTR Doubles,National Rank,Section Rank,Points,City,USTA ID,Tracked\\n" + rows.map(r => r.join(',')).join('\\n');
             const a = document.createElement('a');
             a.href = 'data:text/csv;charset=utf-8,' + encodeURI(csv);
             a.download = 'usta_standings.csv';
