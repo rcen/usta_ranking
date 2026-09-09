@@ -456,10 +456,12 @@ def generate_html(
         .badge-section {{ background: #fef3c7; color: #92400e; border: 1px solid #fde68a; }}
         .badge-unranked {{ background: #f1f5f9; color: #64748b; }}
         .badge-utr {{ background: #e0f2fe; color: #0369a1; border: 1px solid #bae6fd; font-weight: 700; }}
-        .badge-tracked {{ display: inline-flex; align-items: center; padding: 2px 7px; background: #d97706; color: #ffffff; border-radius: 4px; font-size: 0.7rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.5px; margin-right: 8px; vertical-align: middle; box-shadow: 0 1px 2px rgba(0,0,0,0.15); }}
-        td.cell-tracked {{ border: 2.5px solid #d97706 !important; outline: 2px solid #f59e0b; outline-offset: -2px; background-color: #fffbeb !important; font-weight: 700; border-radius: 4px; box-shadow: 0 0 10px rgba(245, 158, 11, 0.35); position: relative; }}
-        tr.row-tracked {{ background-color: rgba(254, 243, 199, 0.22) !important; }}
-        tr.row-tracked:hover td {{ background-color: rgba(254, 243, 199, 0.45) !important; }}
+        .tracked-star {{ display: inline-block; margin-right: 5px; font-size: 1.05rem; vertical-align: middle; }}
+        tr.row-tracked {{ background-color: rgba(254, 243, 199, 0.28) !important; }}
+        tr.row-tracked td {{ border-top: 2.5px solid #d97706 !important; border-bottom: 2.5px solid #d97706 !important; }}
+        tr.row-tracked td:first-child {{ border-left: 2.5px solid #d97706 !important; }}
+        tr.row-tracked td:last-child {{ border-right: 2.5px solid #d97706 !important; }}
+        tr.row-tracked:hover td {{ background-color: rgba(254, 243, 199, 0.5) !important; }}
         .banner {{ margin-top: 14px; background: rgba(255,255,255,0.08); border-left: 4px solid #38bdf8; padding: 10px 14px; border-radius: 6px; font-size: 0.95rem; }}
         .grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; margin-bottom: 20px; }}
         .stat {{ background: var(--card); padding: 18px; border-radius: 10px; border: 1px solid var(--border); }}
@@ -599,13 +601,12 @@ def generate_html(
                 const rCount = (p.rankings||[]).length;
                 const btn = rCount > 0 ? `<button class="btn-view" onclick="openM('${{p.usta_id}}')">All (${{rCount}})</button>` : '-';
                 const isTracked = p.is_tracked;
-                const trackedBadge = isTracked ? '<span class="badge-tracked">&#9733; Tracked</span> ' : '';
-                const nameCellClass = isTracked ? 'class="cell-tracked"' : '';
+                const starIcon = isTracked ? '<span class="tracked-star" title="Tracked Player">&#11088;</span> ' : '';
                 const rowClass = isTracked ? 'class="row-tracked"' : '';
 
                 return `<tr ${{rowClass}}>
                     <td style="color:var(--muted); font-weight:700;">${{idx + 1}}</td>
-                    <td ${{nameCellClass}}>${{trackedBadge}}${{link}}</td>
+                    <td>${{starIcon}}${{link}}</td>
                     <td><code>${{p.usta_id || 'N/A'}}</code></td>
                     <td>${{nRank}}</td>
                     <td>${{sRank}}</td>
