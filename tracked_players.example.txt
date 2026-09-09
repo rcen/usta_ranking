@@ -1,0 +1,9 @@
+# Tracked Players List (Template Example)
+# =======================================
+# Copy this file to 'tracked_players.txt' and add your players.
+# Each row can be a player's full name or numeric USTA Account ID (UAID).
+# Lines starting with '#' and blank lines are ignored.
+#
+# Examples:
+# Joe Smith
+

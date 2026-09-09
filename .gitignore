@@ -9,3 +9,5 @@ usta_api.py
 tests/
 .vscode/
 .idea/
+tracked_players.txt
+watchlist.txt
