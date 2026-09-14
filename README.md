@@ -56,9 +56,15 @@ python usta_rankings.py "https://playtennis.usta.com/Competitions/princetontenni
 python usta_rankings.py 26-17452
 ```
 
-### 5. Check a different age division (e.g. Boys' 14 or Girls' 12):
+### 5. Check a different age division (Auto-detected or via Shortcuts):
+The script automatically detects the division from the tournament title (e.g. `14s`, `12s`, `16s`). You can also use convenient shortcuts with `-l`:
 ```bash
-python usta_rankings.py 26-17452 --list-name "Boys' 14 National Standings List (combined)"
+# Auto-detects 14U from tournament title:
+python usta_rankings.py "https://playtennis.usta.com/Competitions/teamsharkattacktennis/Tournaments/players/C7A7F321-7188-4EA0-9936-A76B3BE18854"
+
+# Use shortcuts: 14, B14, G14, 12, B12, G12, 16, B16, G16, 18, B18, G18
+python usta_rankings.py <tournament> -l 14
+python usta_rankings.py <tournament> -l G14
 ```
 
 ### 6. Skip UTR lookup to speed up execution:
@@ -73,7 +79,7 @@ python usta_rankings.py 26-17452 --no-utr
 | Argument / Flag | Description | Default |
 |-----------------|-------------|---------|
 | `tournament` | Tournament URL, UUID, or Sanction ID (e.g. `26-17452`) | Default tournament |
-| `--list-name`, `-l` | Target ranking list name to match | `"Boys' 12 National Standings List (combined)"` |
+| `--list-name`, `-l` | Target ranking list name or shortcut (`14`, `B14`, `G14`, etc.) | Auto-detected from title (fallback: Boys' 12) |
 | `--output`, `-o` | Custom output HTML filename | `usta_rankings_<id>.html` |
 | `--tracked`, `-t` | Path to text config file of tracked players | `tracked_players.txt` (if present) |
 | `--no-browser` | Generate HTML file without auto-opening in browser | `False` |

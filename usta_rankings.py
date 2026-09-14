@@ -150,6 +150,93 @@ UUID_PATTERN = re.compile(
 )
 
 
+def resolve_target_list(user_arg: Optional[str], tournament_name: str = "") -> str:
+    """
+    Resolves the target ranking list from user argument or auto-detects from tournament name.
+    Supports shortcuts like '10', '12', '14', '16', '18', 'b14', 'g14', 'boys 14', etc.
+    """
+    if user_arg:
+        arg_clean = user_arg.strip().lower()
+        shortcut_map = {
+            "10": "Boys' 10 National Standings List (combined)",
+            "b10": "Boys' 10 National Standings List (combined)",
+            "b10s": "Boys' 10 National Standings List (combined)",
+            "10u": "Boys' 10 National Standings List (combined)",
+            "boys 10": "Boys' 10 National Standings List (combined)",
+            "boys' 10": "Boys' 10 National Standings List (combined)",
+            "g10": "Girls' 10 National Standings List (combined)",
+            "g10s": "Girls' 10 National Standings List (combined)",
+            "10g": "Girls' 10 National Standings List (combined)",
+            "girls 10": "Girls' 10 National Standings List (combined)",
+            "girls' 10": "Girls' 10 National Standings List (combined)",
+
+            "12": "Boys' 12 National Standings List (combined)",
+            "b12": "Boys' 12 National Standings List (combined)",
+            "b12s": "Boys' 12 National Standings List (combined)",
+            "12u": "Boys' 12 National Standings List (combined)",
+            "boys 12": "Boys' 12 National Standings List (combined)",
+            "boys' 12": "Boys' 12 National Standings List (combined)",
+            "g12": "Girls' 12 National Standings List (combined)",
+            "g12s": "Girls' 12 National Standings List (combined)",
+            "12g": "Girls' 12 National Standings List (combined)",
+            "girls 12": "Girls' 12 National Standings List (combined)",
+            "girls' 12": "Girls' 12 National Standings List (combined)",
+
+            "14": "Boys' 14 National Standings List (combined)",
+            "b14": "Boys' 14 National Standings List (combined)",
+            "b14s": "Boys' 14 National Standings List (combined)",
+            "14u": "Boys' 14 National Standings List (combined)",
+            "boys 14": "Boys' 14 National Standings List (combined)",
+            "boys' 14": "Boys' 14 National Standings List (combined)",
+            "g14": "Girls' 14 National Standings List (combined)",
+            "g14s": "Girls' 14 National Standings List (combined)",
+            "14g": "Girls' 14 National Standings List (combined)",
+            "girls 14": "Girls' 14 National Standings List (combined)",
+            "girls' 14": "Girls' 14 National Standings List (combined)",
+
+            "16": "Boys' 16 National Standings List (combined)",
+            "b16": "Boys' 16 National Standings List (combined)",
+            "b16s": "Boys' 16 National Standings List (combined)",
+            "16u": "Boys' 16 National Standings List (combined)",
+            "boys 16": "Boys' 16 National Standings List (combined)",
+            "boys' 16": "Boys' 16 National Standings List (combined)",
+            "g16": "Girls' 16 National Standings List (combined)",
+            "g16s": "Girls' 16 National Standings List (combined)",
+            "16g": "Girls' 16 National Standings List (combined)",
+            "girls 16": "Girls' 16 National Standings List (combined)",
+            "girls' 16": "Girls' 16 National Standings List (combined)",
+
+            "18": "Boys' 18 National Standings List (combined)",
+            "b18": "Boys' 18 National Standings List (combined)",
+            "b18s": "Boys' 18 National Standings List (combined)",
+            "18u": "Boys' 18 National Standings List (combined)",
+            "boys 18": "Boys' 18 National Standings List (combined)",
+            "boys' 18": "Boys' 18 National Standings List (combined)",
+            "g18": "Girls' 18 National Standings List (combined)",
+            "g18s": "Girls' 18 National Standings List (combined)",
+            "18g": "Girls' 18 National Standings List (combined)",
+            "girls 18": "Girls' 18 National Standings List (combined)",
+            "girls' 18": "Girls' 18 National Standings List (combined)",
+        }
+        if arg_clean in shortcut_map:
+            return shortcut_map[arg_clean]
+        return user_arg
+
+    # Auto-detect age division from tournament name if not explicitly specified
+    if tournament_name:
+        m = re.search(r'\b(10|12|14|16|18)\s*(?:s|\'s|u|\s*&\s*under|\s*and\s*under)?\b', tournament_name, re.I)
+        if m:
+            age = m.group(1)
+            is_girls_only = bool(
+                re.search(r'\bgirls?\b|\bg(10|12|14|16|18)\b', tournament_name, re.I)
+                and not re.search(r'\bboys?\b|\bb/g\b|\bg/b\b', tournament_name, re.I)
+            )
+            gender = "Girls'" if is_girls_only else "Boys'"
+            return f"{gender} {age} National Standings List (combined)"
+
+    return DEFAULT_TARGET_LIST
+
+
 def extract_tournament_id(url_or_id: str) -> str:
     """
     Extracts a tournament UUID from a full URL, validates an existing UUID,
@@ -693,8 +780,8 @@ def main():
     parser.add_argument(
         "--list-name",
         "-l",
-        default=DEFAULT_TARGET_LIST,
-        help=f"Target ranking list (default: '{DEFAULT_TARGET_LIST}')",
+        default=None,
+        help="Target ranking list or shortcut ('14', 'B14', 'G14', '12', '16', '18'; default: auto-detected from tournament title)",
     )
     parser.add_argument(
         "--output",
@@ -750,10 +837,12 @@ def main():
     players = data.get("players") or []
     t_name = t_details.get("name", "Unknown Tournament")
 
-    print(f"✅ Loaded '{t_name}' with {len(players)} players.")
-    print(f"🎯 Target List: '{args.list_name}'")
+    target_list = resolve_target_list(args.list_name, t_name)
 
-    html_content = generate_html(t_details, players, args.list_name, tracked_players=tracked_set)
+    print(f"✅ Loaded '{t_name}' with {len(players)} players.")
+    print(f"🎯 Target List: '{target_list}'")
+
+    html_content = generate_html(t_details, players, target_list, tracked_players=tracked_set)
     out_file = args.output or f"usta_rankings_{t_id}.html"
     abs_out = os.path.abspath(out_file)
 
@@ -763,7 +852,7 @@ def main():
     print(f"📄 Dashboard saved: {abs_out}")
 
     # Print summary
-    processed = process_player_rankings(players, args.list_name, tracked_players=tracked_set)
+    processed = process_player_rankings(players, target_list, tracked_players=tracked_set)
     ranked = [p for p in processed if p["has_target_rank"]]
     print(f"🏆 Top 5 Players:")
     for idx, p in enumerate(ranked[:5], 1):
