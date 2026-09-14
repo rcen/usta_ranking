@@ -99,32 +99,77 @@ except ImportError:
             hits = data.get("hits") or []
             if not hits:
                 return {}
-            # Match best candidate by location if provided
-            pid = str(hits[0].get("id") or "").strip()
-            if city or state:
-                for h in hits:
-                    loc = ((h.get("source") or {}).get("location") or {}).get("display", "").lower()
-                    if (city and city.lower() in loc) or (state and state.lower() in loc):
-                        pid = str(h.get("id") or "").strip()
-                        break
-            if not pid:
-                return {}
-            v2_url = f"https://app.utrsports.net/api/v2/player/{pid}"
-            req2 = urllib.request.Request(v2_url, headers=headers)
-            with urllib.request.urlopen(req2, timeout=timeout) as r2:
-                d2 = json.loads(r2.read().decode("utf-8"))
-            s_disp = d2.get("singlesUtrDisplay") or str(d2.get("singlesUtr") or "")
-            d_disp = d2.get("doublesUtrDisplay") or str(d2.get("doublesUtr") or "")
-            return {
-                "utr_id": pid,
-                "singles_utr": float(s_disp) if s_disp and s_disp != "0.00" else None,
-                "singles_utr_display": s_disp if s_disp and s_disp != "0.00" else "Unrated",
-                "doubles_utr": float(d_disp) if d_disp and d_disp != "0.00" else None,
-                "doubles_utr_display": d_disp if d_disp and d_disp != "0.00" else "Unrated",
-                "singles_reliability": d2.get("ratingProgressSingles"),
-                "doubles_reliability": d2.get("ratingProgressDoubles"),
-                "profile_url": f"https://app.utrsports.net/profiles/{pid}",
-            }
+
+            target_parts = [p.lower() for p in clean_name.split() if p]
+            candidates = []
+            for h in hits:
+                s = h.get("source") or {}
+                first = (s.get("firstName") or "").strip().lower()
+                last = (s.get("lastName") or "").strip().lower()
+                full = f"{first} {last}"
+                if not all(p in full for p in target_parts):
+                    if target_parts and target_parts[-1] != last:
+                        continue
+                loc = ((s.get("location") or {}).get("display") or "").strip()
+                is_rated = s.get("ratingStatusSingles") == "Rated" or s.get("ratingStatusDoubles") == "Rated"
+                has_rating = (s.get("singlesUtr") or 0) > 0 or s.get("threeMonthRating") is not None
+                prog = max(s.get("ratingProgressSingles") or 0, s.get("ratingProgressDoubles") or 0)
+                candidates.append({
+                    "id": str(h.get("id") or "").strip(),
+                    "loc": loc,
+                    "is_rated": is_rated,
+                    "has_rating": has_rating,
+                    "prog": prog,
+                })
+
+            if not candidates:
+                candidates = [{"id": str(hits[0].get("id") or "").strip(), "loc": "", "is_rated": False, "has_rating": False, "prog": 0}]
+
+            def score_cand(c):
+                sc = 0
+                cloc = c["loc"].lower()
+                if city and city.lower() in cloc:
+                    sc += 10
+                if state and state.lower() in cloc:
+                    sc += 5
+                if c["is_rated"]:
+                    sc += 20
+                elif c["has_rating"]:
+                    sc += 15
+                elif c["prog"] > 0:
+                    sc += 10
+                return sc
+
+            candidates.sort(key=score_cand, reverse=True)
+
+            res = {}
+            for cand in candidates[:3]:
+                pid = cand["id"]
+                if not pid:
+                    continue
+                v2_url = f"https://app.utrsports.net/api/v2/player/{pid}"
+                req2 = urllib.request.Request(v2_url, headers=headers)
+                with urllib.request.urlopen(req2, timeout=timeout) as r2:
+                    d2 = json.loads(r2.read().decode("utf-8"))
+                s_disp = d2.get("singlesUtrDisplay") or str(d2.get("singlesUtr") or "")
+                d_disp = d2.get("doublesUtrDisplay") or str(d2.get("doublesUtr") or "")
+                s_val = float(s_disp) if s_disp and s_disp != "0.00" else None
+                d_val = float(d_disp) if d_disp and d_disp != "0.00" else None
+
+                res = {
+                    "utr_id": pid,
+                    "singles_utr": s_val,
+                    "singles_utr_display": s_disp if s_val is not None else "Unrated",
+                    "doubles_utr": d_val,
+                    "doubles_utr_display": d_disp if d_val is not None else "Unrated",
+                    "singles_reliability": d2.get("ratingProgressSingles"),
+                    "doubles_reliability": d2.get("ratingProgressDoubles"),
+                    "profile_url": f"https://app.utrsports.net/profiles/{pid}",
+                }
+                if s_val is not None or d_val is not None:
+                    return res
+
+            return res
         except Exception:
             return {}
 

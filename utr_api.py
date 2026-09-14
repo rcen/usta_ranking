@@ -87,8 +87,6 @@ def search_utr_player(
         return None
 
     norm_target_loc = _normalize_location_text(city, state)
-    target_name_parts = [p.lower() for p in re.split(r"\s+", clean_name) if p]
-
     candidates = []
     for h in hits:
         source = h.get("source") or {}
@@ -104,46 +102,158 @@ def search_utr_player(
 
         pid = str(h.get("id") or "").strip()
         loc_display = ((source.get("location") or {}).get("display") or "").strip()
+        is_rated = source.get("ratingStatusSingles") == "Rated" or source.get("ratingStatusDoubles") == "Rated"
+        has_rating = (source.get("singlesUtr") or 0) > 0 or source.get("threeMonthRating") is not None
+        progress = max(source.get("ratingProgressSingles") or 0, source.get("ratingProgressDoubles") or 0)
+
         candidates.append({
             "id": pid,
             "name": f"{source.get('firstName', '')} {source.get('lastName', '')}".strip(),
             "location": loc_display,
             "age": source.get("age"),
             "gender": source.get("gender"),
+            "is_rated": is_rated,
+            "has_rating": has_rating,
+            "progress": progress,
         })
 
     if not candidates:
-        # Fallback to the very first hit if name starts similarly
         first_hit = hits[0].get("source") or {}
         pid = str(hits[0].get("id") or "").strip()
-        return {
+        return [{
             "id": pid,
             "name": f"{first_hit.get('firstName', '')} {first_hit.get('lastName', '')}".strip(),
             "location": ((first_hit.get("location") or {}).get("display") or "").strip(),
             "age": first_hit.get("age"),
-        }
+        }]
 
-    # If location info was provided, score candidates by location match
-    if norm_target_loc:
-        best_candidate = None
-        best_score = -1
-        for c in candidates:
-            c_loc = (c.get("location") or "").lower()
-            score = 0
-            if city and city.lower() in c_loc:
-                score += 3
-            if state:
-                st_upper = state.upper()
-                st_full = STATE_ABBR_TO_NAME.get(st_upper, "")
-                if st_upper in c_loc.upper().split() or (st_full and st_full in c_loc):
-                    score += 2
-            if score > best_score:
-                best_score = score
-                best_candidate = c
-        if best_candidate and best_score > 0:
-            return best_candidate
+    def score_candidate(c: Dict[str, Any]) -> int:
+        score = 0
+        c_loc = (c.get("location") or "").lower()
+        if city and city.lower() in c_loc:
+            score += 10
+        if state:
+            st_upper = state.upper()
+            st_full = STATE_ABBR_TO_NAME.get(st_upper, "").lower()
+            if st_upper in c_loc.upper().split() or (st_full and st_full in c_loc):
+                score += 5
+        # Strongly prefer active rated players over unrated/orphan duplicate profiles
+        if c.get("is_rated"):
+            score += 20
+        elif c.get("has_rating"):
+            score += 15
+        elif (c.get("progress") or 0) > 0:
+            score += 10
+        return score
 
-    return candidates[0]
+    candidates.sort(key=score_candidate, reverse=True)
+    return candidates
+
+
+def search_utr_player(
+    name: str,
+    city: Optional[str] = None,
+    state: Optional[str] = None,
+    timeout: int = 10,
+) -> Optional[Dict[str, Any]]:
+    """Searches for the single best candidate matching a player's name and location."""
+    cands = search_utr_candidates(name, city=city, state=state, timeout=timeout)
+    return cands[0] if cands else None
+
+
+def search_utr_candidates(
+    name: str,
+    city: Optional[str] = None,
+    state: Optional[str] = None,
+    timeout: int = 10,
+) -> List[Dict[str, Any]]:
+    """
+    Searches UTR Sports for all candidates matching player name and location,
+    scored and ordered by match quality and active rating status.
+    """
+    clean_name = name.strip()
+    if not clean_name:
+        return []
+
+    encoded_query = urllib.parse.quote(clean_name)
+    url = f"{UTR_SEARCH_URL}{encoded_query}"
+    headers = {
+        "User-Agent": DEFAULT_USER_AGENT,
+        "Accept": "application/json, text/plain, */*",
+        "Referer": "https://app.utrsports.net/",
+    }
+
+    req = urllib.request.Request(url, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except Exception:
+        return []
+
+    hits = data.get("hits") or []
+    if not hits:
+        return []
+
+    target_name_parts = [p.lower() for p in re.split(r"\s+", clean_name) if p]
+
+    candidates = []
+    for h in hits:
+        source = h.get("source") or {}
+        first = (source.get("firstName") or "").strip().lower()
+        last = (source.get("lastName") or "").strip().lower()
+        full = f"{first} {last}".strip()
+
+        if not all(p in full for p in target_name_parts):
+            if target_name_parts and target_name_parts[-1] != last:
+                continue
+
+        pid = str(h.get("id") or "").strip()
+        loc_display = ((source.get("location") or {}).get("display") or "").strip()
+        is_rated = source.get("ratingStatusSingles") == "Rated" or source.get("ratingStatusDoubles") == "Rated"
+        has_rating = (source.get("singlesUtr") or 0) > 0 or source.get("threeMonthRating") is not None
+        progress = max(source.get("ratingProgressSingles") or 0, source.get("ratingProgressDoubles") or 0)
+
+        candidates.append({
+            "id": pid,
+            "name": f"{source.get('firstName', '')} {source.get('lastName', '')}".strip(),
+            "location": loc_display,
+            "age": source.get("age"),
+            "gender": source.get("gender"),
+            "is_rated": is_rated,
+            "has_rating": has_rating,
+            "progress": progress,
+        })
+
+    if not candidates:
+        first_hit = hits[0].get("source") or {}
+        pid = str(hits[0].get("id") or "").strip()
+        return [{
+            "id": pid,
+            "name": f"{first_hit.get('firstName', '')} {first_hit.get('lastName', '')}".strip(),
+            "location": ((first_hit.get("location") or {}).get("display") or "").strip(),
+            "age": first_hit.get("age"),
+        }]
+
+    def score_candidate(c: Dict[str, Any]) -> int:
+        score = 0
+        c_loc = (c.get("location") or "").lower()
+        if city and city.lower() in c_loc:
+            score += 10
+        if state:
+            st_upper = state.upper()
+            st_full = STATE_ABBR_TO_NAME.get(st_upper, "").lower()
+            if st_upper in c_loc.upper().split() or (st_full and st_full in c_loc):
+                score += 5
+        if c.get("is_rated"):
+            score += 20
+        elif c.get("has_rating"):
+            score += 15
+        elif (c.get("progress") or 0) > 0:
+            score += 10
+        return score
+
+    candidates.sort(key=score_candidate, reverse=True)
+    return candidates
 
 
 def fetch_player_utr_details(utr_id: str, timeout: int = 10) -> Dict[str, Any]:
@@ -217,11 +327,16 @@ def get_player_utr(
     if cache_key in _UTR_CACHE:
         return _UTR_CACHE[cache_key]
 
-    match = search_utr_player(name, city=city, state=state, timeout=timeout)
-    if not match or not match.get("id"):
-        result = {}
-    else:
-        result = fetch_player_utr_details(match["id"], timeout=timeout)
+    candidates = search_utr_candidates(name, city=city, state=state, timeout=timeout)
+    result = {}
+    if candidates:
+        for cand in candidates[:3]:
+            res = fetch_player_utr_details(cand["id"], timeout=timeout)
+            if res:
+                result = res
+                # Prefer profile that actually has rated singles or doubles rating
+                if res.get("singles_utr") is not None or res.get("doubles_utr") is not None:
+                    break
 
     _UTR_CACHE[cache_key] = result
     return result
