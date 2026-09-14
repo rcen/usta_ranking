@@ -5,5 +5,5 @@
 # Lines starting with '#' and blank lines are ignored.
 #
 # Examples:
-# Joe Smith
-
+# John Doe
+# 2018975354
